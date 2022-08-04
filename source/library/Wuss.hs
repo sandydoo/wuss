@@ -50,6 +50,7 @@ module Wuss
   , Config(..)
   , defaultConfig
   , runSecureClientWithConfig
+  , newSecureClientConnection
   ) where
 
 import qualified Control.Applicative as Applicative
@@ -161,15 +162,39 @@ runSecureClientWithConfig
   -> WebSockets.ClientApp a -- ^ Application
   -> IO.IO a
 runSecureClientWithConfig host port path config options headers app = do
+  connection <- newSecureClientConnection host port path config options headers
+  app connection
+
+
+withConnection
+  :: Socket.HostName -- ^ Host
+  -> Socket.PortNumber -- ^ Port
+  -> (Connection.Connection -> IO.IO a)
+  -> IO.IO a
+withConnection host port app = do
   context <- Connection.initConnectionContext
   Exception.bracket
     (Connection.connectTo context (connectionParams host port))
     Connection.connectionClose
-    (\connection -> do
-      stream <- Stream.makeStream
-        (reader config connection)
-        (writer connection)
-      WebSockets.runClientWithStream stream host path options headers app
+    app
+
+
+-- | Creates a secure WebSockets connection with the given 'Config'.
+newSecureClientConnection
+  :: Socket.HostName -- ^ Host
+  -> Socket.PortNumber -- ^ Port
+  -> String.String -- ^ Path
+  -> Config -- ^ Config
+  -> WebSockets.ConnectionOptions -- ^ Options
+  -> WebSockets.Headers -- ^ Headers
+  -> IO.IO WebSockets.Connection
+newSecureClientConnection host port path config options headers =
+  withConnection host port
+    (\connection -> 
+      Exception.bracket
+        (Stream.makeStream (reader config connection) (writer connection))
+        Stream.close
+        (\stream -> WebSockets.newClientConnection stream host path options headers)
     )
 
 
